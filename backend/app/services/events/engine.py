@@ -152,6 +152,25 @@ class EventEngine:
             db_session.add(event_record)
             db_session.commit()
             db_session.refresh(event_record)
+
+            # Automatic Blockchain Evidence Anchoring (Chain of Custody)
+            if evidence_path and 'full_path' in locals() and os.path.isfile(full_path):
+                try:
+                    from app.services.crypto import hash_file
+                    from app.services.blockchain import blockchain_ledger
+
+                    img_hash = hash_file(full_path)
+                    blockchain_ledger.add_block(
+                        data={
+                            "image_hash": img_hash,
+                            "camera_id": event_record.camera_id,
+                            "event_id": event_record.id,
+                            "event_type": event_record.event_type,
+                        },
+                        timestamp=event_record.timestamp.isoformat(),
+                    )
+                except Exception as bc_exc:
+                    inference_logger.warning(f"Blockchain auto-anchor skipped for Event #{event_record.id}: {bc_exc}")
         except Exception as db_exc:
             inference_logger.error(f"Database persistence failed for Event #{candidate.event_type}: {db_exc}")
             try:
@@ -162,6 +181,7 @@ class EventEngine:
         finally:
             if should_close_db:
                 db_session.close()
+
 
         # 6. WebSocket Real-Time Broadcast
         if event_record is not None and event_record.id is not None:
