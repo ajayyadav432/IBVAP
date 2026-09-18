@@ -453,4 +453,43 @@ class EventStatusUpdate(BaseModel):
     status: str = Field(..., description="NEW, ACKNOWLEDGED, RESOLVED")
 
 
+class BlockchainBlockResponse(BaseModel):
+    index: int
+    timestamp: str
+    data: Dict[str, Any]
+    previous_hash: str
+    hash: str
 
+
+class BlockchainLedgerResponse(BaseModel):
+    total_blocks: int
+    chain_valid: bool
+    integrity_message: Optional[str] = None
+    latest_block_hash: str
+    blocks: List[BlockchainBlockResponse]
+
+
+class AlertLogResponse(BaseModel):
+    success: bool
+    event_id: int
+    camera_id: int
+    event_type: str
+    timestamp: str
+    evidence_path: str
+    image_hash: str
+    blockchain_block: BlockchainBlockResponse
+    chain_valid: bool
+    message: str
+
+
+class EvidenceVerifyResponse(BaseModel):
+    is_authentic: bool
+    status: str  # "AUTHENTIC", "TAMPERED", "NOT_FOUND"
+    image_hash: str
+    block_index: Optional[int] = None
+    block_timestamp: Optional[str] = None
+    camera_id: Optional[int] = None
+    previous_hash: Optional[str] = None
+    block_hash: Optional[str] = None
+    chain_valid: bool
+    message: str

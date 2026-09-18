@@ -7,10 +7,23 @@
 
 import os
 import json
+import asyncio
 import time
 import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Response, WebSocket, WebSocketDisconnect, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    Query,
+    UploadFile,
+    File,
+    Form,
+)
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -48,11 +61,18 @@ from app.api.schemas import (
     EventItemResponse,
     EventListResponse,
     EventStatusUpdate,
+    BlockchainBlockResponse,
+    BlockchainLedgerResponse,
+    AlertLogResponse,
+    EvidenceVerifyResponse,
     mask_rtsp_uri,
 )
 from app.core.config import settings
 from app.core.logging import api_logger, camera_logger
 from app.db.session import get_db
+from app.services.crypto import hash_image_bytes, hash_file
+from app.services.blockchain import blockchain_ledger
+
 from app.db.settings_store import (
     get_all_settings,
     set_settings_batch,
@@ -1306,20 +1326,29 @@ def get_event_evidence(event_id: int, db: Session = Depends(get_db)):
     if ".." in rel_path or rel_path.startswith("/") or "\x00" in rel_path:
         raise HTTPException(status_code=400, detail="Invalid evidence file path.")
 
-    if rel_path.startswith("data/"):
-        full_path = os.path.abspath(os.path.join(settings.ROOT_DIR, rel_path))
-    else:
-        full_path = os.path.abspath(os.path.join(settings.DATA_DIR, rel_path))
+    allowed_roots = [
+        os.path.abspath(settings.DATA_DIR),
+        os.path.abspath(os.path.join(settings.ROOT_DIR, "backend", "data")),
+        os.path.abspath(settings.EVIDENCE_STORAGE_PATH),
+    ]
 
-    allowed_root = os.path.abspath(settings.DATA_DIR)
+    candidates = [
+        os.path.abspath(os.path.join(settings.ROOT_DIR, rel_path)),
+        os.path.abspath(os.path.join(settings.DATA_DIR, rel_path)),
+        os.path.abspath(os.path.join(settings.ROOT_DIR, "backend", rel_path)),
+        os.path.abspath(os.path.join(settings.DATA_DIR, rel_path.replace("backend/data/", "").replace("data/", ""))),
+    ]
+    full_path = None
+    for cand in candidates:
+        if os.path.isfile(cand) and any(cand.startswith(ar) for ar in allowed_roots):
+            full_path = cand
+            break
 
-    if not full_path.startswith(allowed_root):
-        raise HTTPException(status_code=403, detail="Access to evidence path outside data directory is forbidden.")
-
-    if not os.path.isfile(full_path):
+    if not full_path:
         raise HTTPException(status_code=404, detail="Evidence file does not exist on disk.")
 
     return FileResponse(full_path, media_type="image/jpeg")
+
 
 
 @router.websocket("/ws/events")
@@ -1343,5 +1372,296 @@ async def websocket_events_endpoint(websocket: WebSocket):
         connection_manager.disconnect(websocket)
     except Exception:
         connection_manager.disconnect(websocket)
+
+
+# ==============================================================================
+# Blockchain Evidence Chain-of-Custody & Alert Logging API Endpoints
+# ==============================================================================
+
+@router.post("/alerts/log", response_model=AlertLogResponse, tags=["Blockchain & Evidence"])
+async def log_alert_with_blockchain(
+    file: UploadFile = File(..., description="Snapshot image file of the alert evidence"),
+    camera_id: int = Form(..., description="ID of the reporting camera"),
+    event_type: str = Form(..., description="Type of event e.g. INTRUSION, LOITERING, PERIMETER_BREACH"),
+    timestamp: Optional[str] = Form(None, description="Optional ISO datetime string (defaults to current UTC time)"),
+    severity: str = Form("HIGH", description="INFO, WARNING, HIGH, CRITICAL"),
+    reason: Optional[str] = Form(None, description="Descriptive reason for alert"),
+    object_type: Optional[str] = Form(None, description="Detected object class (person, car, etc.)"),
+    track_id: Optional[int] = Form(None, description="Tracking ID"),
+    zone_id: Optional[int] = Form(None, description="Zone ID"),
+    confidence: Optional[float] = Form(None, description="Confidence score 0.0-1.0"),
+    db: Session = Depends(get_db),
+):
+    """
+    FastAPI Event Endpoint:
+    1. Accepts an image file and metadata (camera ID, event type, timestamp).
+    2. Saves raw image to the local disk and metadata to SQLite.
+    3. Calculates SHA-256 hash using the crypto utility.
+    4. Writes ONLY the resulting hash and the camera ID to the PrivateBlockchain ledger.
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded evidence image file is empty.")
+
+    # 1. Parse or assign timestamp
+    if timestamp:
+        try:
+            event_dt = _parse_iso_datetime(timestamp)
+        except Exception:
+            event_dt = datetime.datetime.now(datetime.timezone.utc)
+    else:
+        event_dt = datetime.datetime.now(datetime.timezone.utc)
+    iso_timestamp = event_dt.isoformat()
+
+    # 2. Save raw image to disk
+    date_subdir = event_dt.strftime("%Y/%m/%d")
+    target_dir = os.path.join(settings.EVIDENCE_STORAGE_PATH, "events", date_subdir)
+    os.makedirs(target_dir, exist_ok=True)
+
+    clean_event_type = "".join(c for c in event_type if c.isalnum() or c in ("_", "-"))
+    ts_str = event_dt.strftime("%Y%m%d_%H%M%S_%f")
+    filename = f"ev_alert_{clean_event_type}_cam{camera_id}_{ts_str}.jpg"
+    full_image_path = os.path.join(target_dir, filename)
+
+    with open(full_image_path, "wb") as img_out:
+        img_out.write(image_bytes)
+
+    rel_evidence_path = os.path.relpath(full_image_path, settings.ROOT_DIR).replace("\\", "/")
+
+    # 3. Calculate SHA-256 hash
+    image_hash = hash_image_bytes(image_bytes)
+
+    # 4. Save metadata to SQLite
+    event_record = Event(
+        timestamp=event_dt,
+        camera_id=camera_id,
+        event_type=event_type.strip().upper(),
+        severity=severity.strip().upper(),
+        object_type=object_type,
+        track_id=track_id,
+        zone_id=zone_id,
+        confidence=confidence,
+        reason=reason or f"Alert logged via evidence API ({event_type})",
+        evidence_path=rel_evidence_path,
+        status="NEW",
+    )
+    db.add(event_record)
+    db.commit()
+    db.refresh(event_record)
+
+    # 5. Write ONLY the resulting hash and camera ID to PrivateBlockchain ledger
+    block = blockchain_ledger.add_block(
+        data={
+            "image_hash": image_hash,
+            "camera_id": camera_id,
+            "event_id": event_record.id,
+            "event_type": event_record.event_type,
+        },
+        timestamp=iso_timestamp,
+    )
+
+    chain_valid, _ = blockchain_ledger.is_chain_valid()
+
+    return AlertLogResponse(
+        success=True,
+        event_id=event_record.id,
+        camera_id=camera_id,
+        event_type=event_record.event_type,
+        timestamp=iso_timestamp,
+        evidence_path=rel_evidence_path,
+        image_hash=image_hash,
+        blockchain_block=BlockchainBlockResponse(
+            index=block.index,
+            timestamp=block.timestamp,
+            data=block.data,
+            previous_hash=block.previous_hash,
+            hash=block.hash,
+        ),
+        chain_valid=chain_valid,
+        message="Alert logged, evidence stored, and cryptographic hash anchored to PrivateBlockchain ledger.",
+    )
+
+
+@router.post("/alerts/verify", response_model=EvidenceVerifyResponse, tags=["Blockchain & Evidence"])
+async def verify_evidence_authenticity(
+    file: UploadFile = File(..., description="Snapshot image file to verify against the blockchain ledger"),
+    alert_id: Optional[int] = Form(None, description="Optional canonical alert/event ID to cross-reference"),
+    db: Session = Depends(get_db),
+):
+    """
+    Evidence Verification Endpoint:
+    Accepts an image file, calculates its SHA-256 hash, and queries the PrivateBlockchain
+    to confirm if that exact hash exists and if the chain remains unbroken.
+    Returns a JSON response indicating whether the evidence is authentic or tampered with.
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file for verification is empty.")
+
+    # 1. Calculate SHA-256 hash of uploaded file
+    calculated_hash = hash_image_bytes(image_bytes)
+
+    # 2. Verify overall blockchain integrity
+    chain_valid, chain_err = blockchain_ledger.is_chain_valid()
+
+    # 3. Query PrivateBlockchain for exact hash
+    block = blockchain_ledger.find_block_by_image_hash(calculated_hash)
+
+    if not chain_valid:
+        return EvidenceVerifyResponse(
+            is_authentic=False,
+            status="TAMPERED",
+            image_hash=calculated_hash,
+            block_index=block.index if block else None,
+            block_timestamp=block.timestamp if block else None,
+            camera_id=block.data.get("camera_id") if block and block.data else None,
+            previous_hash=block.previous_hash if block else None,
+            block_hash=block.hash if block else None,
+            chain_valid=False,
+            message=f"CRITICAL: Blockchain chain integrity compromised: {chain_err}",
+        )
+
+    if block is not None:
+        if alert_id is not None:
+            event = db.query(Event).filter(Event.id == alert_id).first()
+            if event and block.data.get("event_id") and block.data.get("event_id") != alert_id:
+                return EvidenceVerifyResponse(
+                    is_authentic=False,
+                    status="TAMPERED",
+                    image_hash=calculated_hash,
+                    block_index=block.index,
+                    block_timestamp=block.timestamp,
+                    camera_id=block.data.get("camera_id"),
+                    previous_hash=block.previous_hash,
+                    block_hash=block.hash,
+                    chain_valid=True,
+                    message=f"Evidence mismatch: Hash matches Block #{block.index} anchored to Event #{block.data.get('event_id')}, not Event #{alert_id}.",
+                )
+
+        return EvidenceVerifyResponse(
+            is_authentic=True,
+            status="AUTHENTIC",
+            image_hash=calculated_hash,
+            block_index=block.index,
+            block_timestamp=block.timestamp,
+            camera_id=block.data.get("camera_id"),
+            previous_hash=block.previous_hash,
+            block_hash=block.hash,
+            chain_valid=True,
+            message=f"Evidence is AUTHENTIC and tamper-free. Mathematically verified in Block #{block.index} anchored at {block.timestamp}.",
+        )
+    else:
+        return EvidenceVerifyResponse(
+            is_authentic=False,
+            status="TAMPERED",
+            image_hash=calculated_hash,
+            block_index=None,
+            block_timestamp=None,
+            camera_id=None,
+            previous_hash=None,
+            block_hash=None,
+            chain_valid=True,
+            message="Evidence verification FAILED: The cryptographic SHA-256 hash was not found in any ledger block. The file has been modified or tampered with.",
+        )
+
+
+@router.get("/blockchain/ledger", response_model=BlockchainLedgerResponse, tags=["Blockchain & Evidence"])
+def get_blockchain_ledger():
+    """
+    Retrieve full blockchain ledger, chain integrity status, and block history.
+    """
+    chain_valid, integrity_err = blockchain_ledger.is_chain_valid()
+    blocks = [BlockchainBlockResponse(**b.to_dict()) for b in blockchain_ledger.chain]
+    latest_hash = blockchain_ledger.get_latest_block().hash
+    return BlockchainLedgerResponse(
+        total_blocks=len(blocks),
+        chain_valid=chain_valid,
+        integrity_message=integrity_err if not chain_valid else "Chain integrity mathematically verified (all blocks intact).",
+        latest_block_hash=latest_hash,
+        blocks=blocks,
+    )
+
+
+@router.post("/blockchain/verify", tags=["Blockchain & Evidence"])
+def verify_blockchain_chain():
+    """
+    Perform a complete cryptographic integrity audit across all blocks in the ledger.
+    """
+    chain_valid, err = blockchain_ledger.is_chain_valid()
+    return {
+        "chain_valid": chain_valid,
+        "total_blocks": len(blockchain_ledger.chain),
+        "status": "SECURE" if chain_valid else "COMPROMISED",
+        "detail": err or "All block hashes and cryptographic linkage intact.",
+        "latest_hash": blockchain_ledger.get_latest_block().hash,
+    }
+
+
+@router.get("/events/{event_id}/blockchain-verify", response_model=EvidenceVerifyResponse, tags=["Blockchain & Evidence"])
+def verify_stored_event_evidence(event_id: int, db: Session = Depends(get_db)):
+    """
+    Verify the on-disk evidence image for a recorded event against the PrivateBlockchain.
+    """
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail=f"Event #{event_id} not found.")
+    if not event.evidence_path:
+        raise HTTPException(status_code=404, detail="Event does not have an evidence image recorded.")
+
+    full_path = os.path.abspath(os.path.join(settings.ROOT_DIR, event.evidence_path.replace("\\", "/")))
+    if not os.path.isfile(full_path):
+        full_path = os.path.abspath(os.path.join(settings.DATA_DIR, event.evidence_path.replace("\\", "/").replace("data/", "")))
+
+    if not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail="Evidence file missing on disk.")
+
+    with open(full_path, "rb") as f:
+        img_bytes = f.read()
+
+    calculated_hash = hash_image_bytes(img_bytes)
+    chain_valid, chain_err = blockchain_ledger.is_chain_valid()
+    block = blockchain_ledger.find_block_by_image_hash(calculated_hash)
+
+    if not chain_valid:
+        return EvidenceVerifyResponse(
+            is_authentic=False,
+            status="TAMPERED",
+            image_hash=calculated_hash,
+            block_index=block.index if block else None,
+            block_timestamp=block.timestamp if block else None,
+            camera_id=event.camera_id,
+            previous_hash=block.previous_hash if block else None,
+            block_hash=block.hash if block else None,
+            chain_valid=False,
+            message=f"Blockchain chain integrity compromised: {chain_err}",
+        )
+
+    if block is not None:
+        return EvidenceVerifyResponse(
+            is_authentic=True,
+            status="AUTHENTIC",
+            image_hash=calculated_hash,
+            block_index=block.index,
+            block_timestamp=block.timestamp,
+            camera_id=event.camera_id,
+            previous_hash=block.previous_hash,
+            block_hash=block.hash,
+            chain_valid=True,
+            message=f"Evidence for Event #{event_id} is mathematically verified AUTHENTIC against Block #{block.index}.",
+        )
+    else:
+        return EvidenceVerifyResponse(
+            is_authentic=False,
+            status="TAMPERED",
+            image_hash=calculated_hash,
+            block_index=None,
+            block_timestamp=None,
+            camera_id=event.camera_id,
+            previous_hash=None,
+            block_hash=None,
+            chain_valid=True,
+            message=f"TAMPERING DETECTED! The current evidence image file on disk has hash {calculated_hash}, which was not anchored in the blockchain ledger.",
+        )
+
 
 
