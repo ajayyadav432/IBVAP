@@ -657,15 +657,204 @@ Antigravity must never:
 
 # 15. CURRENT ERROR REGISTER
 
-No project-specific errors have been recorded yet.
-
 ```text
 Status: GREEN
 Open errors: 0
+Resolved errors: 5
+Verified fixes: 5
 Known blockers: 0
 ```
 
-This section should be updated as soon as implementation begins.
+---
+
+## ERR-20260918-001
+
+Date: 2026-09-18  
+Status: VERIFIED  
+Severity: P1 — MAJOR  
+Component: Backend API / Multipart Uploads  
+
+### Symptom
+FastAPI route registration failure on startup or test collection when defining routes with `UploadFile` or `Form(...)`.
+
+### Exact Error
+```text
+RuntimeError: Form data requires "python-multipart" to be installed.
+You can install "python-multipart" with:
+pip install python-multipart
+```
+
+### Reproduction
+Run `pytest` against any route invoking `UploadFile` or `Form` without `python-multipart` installed in virtual environment.
+
+### Expected
+Endpoints parse multipart form-data and binary evidence uploads seamlessly.
+
+### Actual
+FastAPI runtime crashed with `RuntimeError`.
+
+### Root Cause
+FastAPI delegates form and file payload parsing to Starlette, which requires `python-multipart` as an optional dependency that was missing from `requirements.txt`.
+
+### Fix
+1. Installed `python-multipart>=0.0.9` into virtual environment.
+2. Added `python-multipart>=0.0.9` to `backend/requirements.txt`.
+
+### Regression Test
+`test_blockchain_chain_of_custody.py::test_api_log_alert_and_verify` PASSED.
+
+### Files Changed
+- `backend/requirements.txt`
+
+---
+
+## ERR-20260918-002
+
+Date: 2026-09-18  
+Status: VERIFIED  
+Severity: P1 — MAJOR  
+Component: Backend Storage / Evidence Retrieval Path Resolution  
+
+### Symptom
+Evidence snapshot retrieval endpoint `GET /api/events/{event_id}/evidence` returned HTTP 404 even though the JPEG file was saved on disk.
+
+### Exact Error
+```text
+AssertionError: assert 404 == 200
++ where 404 = <Response [404 Not Found]>.status_code
+```
+
+### Reproduction
+Run `pytest tests/test_event_history_evidence.py::test_9_evidence_link_and_retrieval` when the working directory is `prototype/backend`.
+
+### Expected
+The endpoint resolves the relative evidence path whether saved relative to project root (`data/evidence/...`) or relative to backend directory (`backend/data/evidence/...`).
+
+### Actual
+The path resolution logic only checked `settings.DATA_DIR` against root, missing paths starting with `backend/data/evidence/`.
+
+### Fix
+Updated `get_event_evidence` in `backend/app/api/routes.py` to evaluate multiple allowed root directories (`settings.DATA_DIR`, `settings.ROOT_DIR/backend/data`, `settings.EVIDENCE_STORAGE_PATH`) while enforcing strict directory traversal protection (`..` prevention).
+
+### Regression Test
+`tests/test_event_history_evidence.py` (all 20 tests) and `tests/test_blockchain_chain_of_custody.py` PASSED.
+
+### Files Changed
+- `backend/app/api/routes.py`
+
+---
+
+## ERR-20260918-003
+
+Date: 2026-09-18  
+Status: VERIFIED  
+Severity: P2 — MODERATE  
+Component: Blockchain Ledger / Test Hermeticity  
+
+### Symptom
+Intermittent test assertion failure in `test_api_log_alert_and_verify` when comparing block index of newly uploaded alert.
+
+### Exact Error
+```text
+AssertionError: assert 1 == 3
+```
+
+### Reproduction
+Running `test_api_log_alert_and_verify` repeatedly against a persistent ledger file using static dummy image bytes.
+
+### Expected
+Each test run verifies against its own newly created block.
+
+### Actual
+Because the dummy image payload was static, the SHA-256 hash was identical to a block created in an earlier test run. When querying the blockchain by hash, it matched the earlier block index instead of the current one.
+
+### Fix
+Injected a unique runtime UUID seed (`uuid.uuid4()`) into the dummy test image payload to guarantee isolated hash identification per test execution.
+
+### Regression Test
+`tests/test_blockchain_chain_of_custody.py::test_api_log_alert_and_verify` PASSED reliably across consecutive runs.
+
+### Files Changed
+- `backend/tests/test_blockchain_chain_of_custody.py`
+
+---
+
+## ERR-20260918-004
+
+Date: 2026-09-18  
+Status: VERIFIED  
+Severity: P3 — MINOR / TECHNICAL DEBT  
+Component: Core Models, Rules & Analytics Datetime Deprecations  
+
+### Symptom
+270 Python 3.12 deprecation warnings polluting test output and server execution logs on every database save, event triggering, or model update.
+
+### Exact Error
+```text
+DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version.
+Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+```
+
+### Reproduction
+Execute `.venv/bin/pytest tests/` in Python 3.12 environment.
+
+### Expected
+Clean, zero-warning test output complying with Python 3.12+ UTC standards.
+
+### Actual
+270 warnings produced across `app/models/schema.py`, `app/api/routes.py`, `app/db/settings_store.py`, `app/services/events/engine.py`, `app/services/rules/engine.py`, `app/services/anpr/engine.py`, and `app/services/zone/engine.py`.
+
+### Fix
+1. Created `utc_now()` helper in `app/models/schema.py` using `datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)` to provide timezone-aware UTC generation while preserving naive datetime serialization in SQLite.
+2. Replaced all deprecated `datetime.datetime.utcnow()` calls across services and routes with timezone-aware ISO string generators or `utc_now()` equivalents.
+
+### Regression Test
+All 155 tests passed with 269 warnings eliminated down to 2 third-party upstream warnings.
+
+### Files Changed
+- `backend/app/models/schema.py`
+- `backend/app/api/routes.py`
+- `backend/app/db/settings_store.py`
+- `backend/app/services/events/engine.py`
+- `backend/app/services/rules/engine.py`
+- `backend/app/services/anpr/engine.py`
+- `backend/app/services/zone/engine.py`
+
+---
+
+## ERR-20260918-005
+
+Date: 2026-09-18  
+Status: VERIFIED  
+Severity: P2 — MODERATE  
+Component: End-to-End Pipeline / Blockchain Ledger Collision  
+
+### Symptom
+In `test_e2e_full_pipeline.py`, querying `blockchain_ledger.find_block_by_image_hash` returned an older block from a previous run instead of the newly created block.
+
+### Exact Error
+```text
+AssertionError: assert 136 == 137
+```
+
+### Reproduction
+Execute `test_e2e_full_pipeline.py` repeatedly using static OpenCV synthetic frames without dynamic nonces.
+
+### Expected
+The freshly synthesized surveillance frame has a globally unique SHA-256 hash.
+
+### Actual
+Identical pixel contents produced identical hashes, resolving to the first block in the ledger containing that hash.
+
+### Fix
+1. Added dynamic `uuid.uuid4().hex` nonce text directly rendered onto the synthetic test frame using OpenCV `putText`.
+2. Wrapped test in `try...finally` to ensure hermetic cleanup of database records.
+
+### Regression Test
+`test_e2e_full_pipeline.py` PASSED 100% in 2.28s.
+
+### Files Changed
+- `backend/tests/test_e2e_full_pipeline.py`
 
 ---
 
