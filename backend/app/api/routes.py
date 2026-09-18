@@ -170,7 +170,7 @@ def format_camera_response(cam: Camera, status_info: dict, db_zones: Optional[Li
             plate_text=item.get("plate_text", "UNKNOWN"),
             quality=item.get("quality", "UNREADABLE"),
             confidence=item.get("confidence", 0.0),
-            timestamp=item.get("timestamp", datetime.datetime.utcnow().isoformat()),
+            timestamp=item.get("timestamp", datetime.datetime.now(datetime.timezone.utc).isoformat()),
             plate_bbox=item.get("plate_bbox"),
             vehicle_bbox=item.get("vehicle_bbox"),
             evidence_path=item.get("evidence_path"),
@@ -226,7 +226,7 @@ def format_camera_response(cam: Camera, status_info: dict, db_zones: Optional[Li
             zone_name=item.get("zone_name"),
             zone_type=item.get("zone_type"),
             object_type=item.get("object_type", "person"),
-            timestamp=item.get("timestamp", datetime.datetime.utcnow().isoformat()),
+            timestamp=item.get("timestamp", datetime.datetime.now(datetime.timezone.utc).isoformat()),
             severity=item.get("severity", "HIGH"),
             reason=item.get("reason", "Suspicious activity detected."),
             confidence=item.get("confidence"),
@@ -380,7 +380,7 @@ def update_camera(camera_id: int, payload: CameraUpdate, db: Session = Depends(g
     if payload.enabled is not None:
         cam.enabled = payload.enabled
 
-    cam.updated_at = datetime.datetime.utcnow()
+    cam.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(cam)
 
@@ -568,7 +568,7 @@ def get_camera_anpr(camera_id: int, db: Session = Depends(get_db)):
             plate_text=item.get("plate_text", "UNKNOWN"),
             quality=item.get("quality", "UNREADABLE"),
             confidence=item.get("confidence", 0.0),
-            timestamp=item.get("timestamp", datetime.datetime.utcnow().isoformat()),
+            timestamp=item.get("timestamp", datetime.datetime.now(datetime.timezone.utc).isoformat()),
             plate_bbox=item.get("plate_bbox"),
             vehicle_bbox=item.get("vehicle_bbox"),
             evidence_path=item.get("evidence_path"),
@@ -729,7 +729,7 @@ def update_zone(zone_id: int, payload: ZoneUpdate, db: Session = Depends(get_db)
     if payload.enabled is not None:
         zone.enabled = payload.enabled
 
-    zone.updated_at = datetime.datetime.utcnow()
+    zone.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(zone)
 
@@ -793,7 +793,7 @@ def update_camera(camera_id: int, payload: CameraUpdate, db: Session = Depends(g
     if payload.enabled is not None:
         cam.enabled = payload.enabled
 
-    cam.updated_at = datetime.datetime.utcnow()
+    cam.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(cam)
 
@@ -1608,11 +1608,20 @@ def verify_stored_event_evidence(event_id: int, db: Session = Depends(get_db)):
     if not event.evidence_path:
         raise HTTPException(status_code=404, detail="Event does not have an evidence image recorded.")
 
-    full_path = os.path.abspath(os.path.join(settings.ROOT_DIR, event.evidence_path.replace("\\", "/")))
-    if not os.path.isfile(full_path):
-        full_path = os.path.abspath(os.path.join(settings.DATA_DIR, event.evidence_path.replace("\\", "/").replace("data/", "")))
+    clean_path = event.evidence_path.replace("\\", "/").lstrip("/")
+    candidates = [
+        os.path.abspath(os.path.join(settings.ROOT_DIR, clean_path)),
+        os.path.abspath(os.path.join(settings.DATA_DIR, clean_path.replace("backend/data/", "").replace("data/", ""))),
+        os.path.abspath(os.path.join(settings.DATA_DIR, clean_path)),
+        os.path.abspath(os.path.join(settings.EVIDENCE_STORAGE_PATH, clean_path.split("evidence/")[-1] if "evidence/" in clean_path else clean_path)),
+    ]
+    full_path = None
+    for cand in candidates:
+        if os.path.isfile(cand):
+            full_path = cand
+            break
 
-    if not os.path.isfile(full_path):
+    if not full_path:
         raise HTTPException(status_code=404, detail="Evidence file missing on disk.")
 
     with open(full_path, "rb") as f:

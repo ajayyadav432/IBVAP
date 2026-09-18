@@ -103,7 +103,7 @@ def set_setting(key: str, value: Any, db: Optional[Session] = None) -> None:
         record = db.query(Setting).filter(Setting.key == key).first()
         if record:
             record.value_json = val_json
-            record.updated_at = datetime.datetime.utcnow()
+            record.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         else:
             record = Setting(key=key, value_json=val_json)
             db.add(record)
@@ -132,7 +132,7 @@ def set_settings_batch(updates: Dict[str, Any], db: Optional[Session] = None) ->
             record = db.query(Setting).filter(Setting.key == key).first()
             if record:
                 record.value_json = val_json
-                record.updated_at = datetime.datetime.utcnow()
+                record.updated_at = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
             else:
                 record = Setting(key=key, value_json=val_json)
                 db.add(record)

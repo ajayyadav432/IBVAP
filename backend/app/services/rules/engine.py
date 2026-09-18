@@ -100,7 +100,7 @@ class SuspiciousActivityEngine:
         if frame_time is None:
             frame_time = time.time()
         if timestamp_iso is None:
-            timestamp_iso = datetime.datetime.utcnow().isoformat()
+            timestamp_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         all_candidates: List[SuspiciousActivityCandidate] = []
 

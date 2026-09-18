@@ -103,7 +103,7 @@ class ZoneEngine:
 
         candidates: List[IntrusionEventCandidate] = []
         active_track_ids = {t.track_id for t in tracks}
-        now_iso = datetime.datetime.utcnow().isoformat()
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # Reset active intrusions map
         current_intrusions: Dict[int, List[int]] = {zid: [] for zid in self._zones.keys()}

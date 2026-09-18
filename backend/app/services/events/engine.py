@@ -103,10 +103,12 @@ class EventEngine:
             try:
                 clean_ts = candidate.timestamp.replace("Z", "+00:00")
                 event_dt = datetime.datetime.fromisoformat(clean_ts)
+                if event_dt.tzinfo is not None:
+                    event_dt = event_dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
             except Exception:
-                event_dt = datetime.datetime.utcnow()
+                event_dt = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         else:
-            event_dt = datetime.datetime.utcnow()
+            event_dt = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
         # 4. Evidence Capture (Annotated Snapshot)
         evidence_path: Optional[str] = candidate.evidence_path
