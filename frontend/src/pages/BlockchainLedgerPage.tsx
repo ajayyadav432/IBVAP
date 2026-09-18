@@ -67,6 +67,7 @@ export const BlockchainLedgerPage: React.FC = () => {
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const [auditingChain, setAuditingChain] = useState<boolean>(false);
   const [auditMessage, setAuditMessage] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
 
   // Verifier State
   const [verifyFile, setVerifyFile] = useState<File | null>(null);
@@ -87,8 +88,8 @@ export const BlockchainLedgerPage: React.FC = () => {
   const logFileInputRef = useRef<HTMLInputElement>(null);
 
   // 1. Fetch live ledger state
-  const fetchLedger = async () => {
-    setLoading(true);
+  const fetchLedger = async (quiet: boolean = false) => {
+    if (!quiet) setLoading(true);
     try {
       const res = await fetch('/api/blockchain/ledger');
       if (res.ok) {
@@ -101,13 +102,75 @@ export const BlockchainLedgerPage: React.FC = () => {
     } catch (err) {
       console.error('Failed to load blockchain ledger:', err);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchLedger();
+    fetchLedger(false);
   }, []);
+
+  // Background auto-polling for real-time surveillance events
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(() => {
+      fetchLedger(true);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [autoRefresh]);
+
+  // Hackathon Evaluation: Quick Sample Generator
+  const handleLoadSample = (tampered: boolean) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Dark military surveillance palette
+    ctx.fillStyle = '#090D16';
+    ctx.fillRect(0, 0, 640, 360);
+
+    // Grid lines
+    ctx.strokeStyle = '#1E293B';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < 640; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 360); ctx.stroke();
+    }
+    for (let y = 0; y < 360; y += 40) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(640, y); ctx.stroke();
+    }
+
+    // Detection box
+    ctx.strokeStyle = tampered ? '#EF4444' : '#10B981';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(180, 80, 200, 220);
+
+    // Overlay Header & Metadata
+    ctx.fillStyle = tampered ? '#EF4444' : '#10B981';
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText(tampered ? '[SIMULATED ROGUE ALTERATION - TAMPER DETECTED]' : '[AUTHENTIC PERIMETER BREACH EVIDENCE]', 180, 70);
+
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = '11px monospace';
+    ctx.fillText('CAM-01 [SECTOR 4 - NORTHERN BORDER] | HIGH_RESOLUTION_SENSOR', 20, 30);
+    ctx.fillText(`CAPTURE_UTC: ${new Date().toISOString()}`, 20, 48);
+    ctx.fillText(`NONCE: ${Math.random().toString(36).substring(2, 10).toUpperCase()}`, 20, 66);
+
+    canvas.toBlob((blob) => {
+      if (blob) {
+        const file = new File(
+          [blob],
+          tampered ? 'simulated_tampered_evidence.jpg' : 'official_sector4_breach_snapshot.jpg',
+          { type: 'image/jpeg' }
+        );
+        setVerifyFile(file);
+        const url = URL.createObjectURL(file);
+        setVerifyPreviewUrl(url);
+        setVerifyResult(null);
+      }
+    }, 'image/jpeg');
+  };
 
   // 2. Audit Chain Cryptographic Linkage
   const handleAuditChain = async () => {
@@ -304,6 +367,23 @@ export const BlockchainLedgerPage: React.FC = () => {
               {ledger?.chain_valid ? 'CHAIN VERIFIED (INTACT)' : 'CHAIN INTEGRITY ALERT'}
             </span>
           </div>
+
+          <button
+            onClick={() => setAutoRefresh(!autoRefresh)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border ${
+              autoRefresh
+                ? 'bg-emerald-950/60 border-emerald-700/80 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white'
+            }`}
+            title="Toggle real-time live polling for incoming surveillance events"
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                autoRefresh ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+              }`}
+            />
+            <span>Auto-Sync: {autoRefresh ? 'ACTIVE (4s)' : 'PAUSED'}</span>
+          </button>
 
           <button
             onClick={handleAuditChain}
@@ -699,6 +779,32 @@ export const BlockchainLedgerPage: React.FC = () => {
                 The system computes its SHA-256 hash in real time and queries the permissioned blockchain ledger
                 to verify that the evidence has not been edited, photoshopped, or replaced by a rogue operator.
               </p>
+            </div>
+
+            {/* Quick Demo Presets Bar for Judges */}
+            <div className="p-4 rounded-xl bg-[#0E1320] border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+                <Database className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span>Hackathon Evaluation Presets:</span>
+              </div>
+              <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => handleLoadSample(false)}
+                  className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-700/80 text-emerald-300 text-xs font-mono font-medium transition-colors flex items-center gap-1.5 justify-center"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Load Authentic Frame</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLoadSample(true)}
+                  className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg bg-red-950/70 hover:bg-red-900 border border-red-700/80 text-red-300 text-xs font-mono font-medium transition-colors flex items-center gap-1.5 justify-center"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                  <span>Load Tampered Frame</span>
+                </button>
+              </div>
             </div>
 
             {/* Dropzone Card */}

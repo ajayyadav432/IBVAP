@@ -6,6 +6,7 @@ import {
   Cpu,
   Crosshair,
   ShieldAlert,
+  ShieldCheck,
   Bell,
   Scan,
   CreditCard,
@@ -255,8 +256,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
         </div>
 
-        {/* Engine Diagnostics Pill */}
+        {/* Engine Diagnostics & Blockchain Ledger Pills */}
         <div className="flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded bg-background border border-emerald-900/60 text-[11px] font-mono text-emerald-400">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span>LEDGER: IMMUTABLE (SHA-256)</span>
+          </div>
+
           <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded bg-background border border-border text-[11px] font-mono text-secondary">
             <Activity className="w-3.5 h-3.5 text-emerald-400" />
             <span>
