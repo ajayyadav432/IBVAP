@@ -6,9 +6,10 @@ import {
   ShieldAlert,
   Activity,
   Settings as SettingsIcon,
+  ShieldCheck,
 } from 'lucide-react';
 
-export type NavTab = 'dashboard' | 'cameras' | 'events' | 'zones' | 'analytics' | 'settings';
+export type NavTab = 'dashboard' | 'cameras' | 'events' | 'blockchain' | 'zones' | 'analytics' | 'settings';
 
 interface NavigationProps {
   activeTab: NavTab;
@@ -45,6 +46,14 @@ export const Navigation: React.FC<NavigationProps> = ({
       badgeColor: 'bg-accent text-white',
     },
     {
+      id: 'blockchain' as NavTab,
+      label: 'Chain of Custody',
+      icon: ShieldCheck,
+      desc: 'Blockchain Ledger',
+      badge: 'SHA-256',
+      badgeColor: 'bg-emerald-950 text-emerald-300 border border-emerald-800/60',
+    },
+    {
       id: 'zones' as NavTab,
       label: 'Zones & Fences',
       icon: ShieldAlert,
@@ -66,6 +75,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       badge: null,
     },
   ];
+
 
   return (
     <aside className="w-64 border-r border-border bg-surface flex flex-col justify-between p-4 select-none shrink-0">

@@ -7,6 +7,7 @@ import { EventsPage } from './pages/EventsPage';
 import { ZonesPage } from './pages/ZonesPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { BlockchainLedgerPage } from './pages/BlockchainLedgerPage';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
@@ -176,6 +177,8 @@ export function App() {
           {activeTab === 'cameras' && <CamerasPage />}
 
           {activeTab === 'events' && <EventsPage />}
+
+          {activeTab === 'blockchain' && <BlockchainLedgerPage />}
 
           {activeTab === 'zones' && (
             <ZonesPage onNavigateToSettings={handleNavigateToSettings} />

@@ -5,6 +5,9 @@ import {
   RefreshCw, 
   CheckCircle2, 
   ShieldAlert, 
+  ShieldCheck,
+  Lock,
+  Fingerprint,
   Eye, 
   Image as ImageIcon,
   Search,
@@ -55,6 +58,35 @@ export const EventsPage: React.FC = () => {
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
   const [evidenceLoading, setEvidenceLoading] = useState<boolean>(false);
   const [evidenceError, setEvidenceError] = useState<boolean>(false);
+  const [verifyingBlockchain, setVerifyingBlockchain] = useState<boolean>(false);
+  const [blockchainProof, setBlockchainProof] = useState<any>(null);
+
+  const handleVerifyBlockchain = async (eventId: number) => {
+    setVerifyingBlockchain(true);
+    setBlockchainProof(null);
+    try {
+      const res = await fetch(`/api/events/${eventId}/blockchain-verify`);
+      if (res.ok) {
+        const data = await res.json();
+        setBlockchainProof(data);
+      } else {
+        const err = await res.json();
+        setBlockchainProof({
+          is_authentic: false,
+          status: 'TAMPERED',
+          message: err.detail || 'Verification error',
+        });
+      }
+    } catch (e) {
+      setBlockchainProof({
+        is_authentic: false,
+        status: 'TAMPERED',
+        message: 'Could not connect to blockchain verification service.',
+      });
+    } finally {
+      setVerifyingBlockchain(false);
+    }
+  };
 
   const fetchCameras = async () => {
     try {
@@ -413,6 +445,7 @@ export const EventsPage: React.FC = () => {
                             setSelectedEvent(ev);
                             setEvidenceLoading(true);
                             setEvidenceError(false);
+                            setBlockchainProof(null);
                           }}
                           className="p-1 rounded bg-elevated border border-border text-secondary hover:text-primary hover:border-accent transition-colors"
                           title="View Event Details"
@@ -549,6 +582,52 @@ export const EventsPage: React.FC = () => {
                   <span className="text-[10px] text-secondary font-mono block break-all">
                     Identifier: {selectedEvent.evidence_path}
                   </span>
+
+                  {/* Cryptographic Chain of Custody Verification */}
+                  <div className="pt-3 border-t border-border/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-mono text-slate-300 flex items-center gap-1.5 font-bold">
+                        <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                        Blockchain Chain of Custody
+                      </span>
+                      <button
+                        onClick={() => handleVerifyBlockchain(selectedEvent.id)}
+                        disabled={verifyingBlockchain}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 text-[10px] font-mono font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      >
+                        <Fingerprint className={`w-3 h-3 ${verifyingBlockchain ? 'animate-spin' : ''}`} />
+                        <span>{verifyingBlockchain ? 'Verifying...' : 'Verify Cryptographic Hash'}</span>
+                      </button>
+                    </div>
+
+                    {blockchainProof && (
+                      <div
+                        className={`p-3 rounded-lg border text-xs font-mono space-y-1.5 ${
+                          blockchainProof.is_authentic
+                            ? 'bg-emerald-950/40 border-emerald-800/80 text-emerald-200'
+                            : 'bg-red-950/40 border-red-800/80 text-red-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 font-bold">
+                          {blockchainProof.is_authentic ? (
+                            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                          ) : (
+                            <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
+                          )}
+                          <span>
+                            {blockchainProof.is_authentic
+                              ? `AUTHENTICATED: Anchored in Block #${blockchainProof.block_index}`
+                              : 'TAMPERING DETECTED / EVIDENCE UNVERIFIED'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-snug">{blockchainProof.message}</p>
+                        <div className="text-[10px] text-slate-400 break-all pt-1 border-t border-slate-800/60">
+                          <span className="text-slate-500">SHA-256: </span>
+                          <span className="text-cyan-300">{blockchainProof.image_hash}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -570,7 +649,10 @@ export const EventsPage: React.FC = () => {
                     </button>
                   )}
                   <button
-                    onClick={() => setSelectedEvent(null)}
+                    onClick={() => {
+                      setSelectedEvent(null);
+                      setBlockchainProof(null);
+                    }}
                     className="px-3 py-1.5 rounded bg-elevated border border-border text-secondary hover:text-primary transition-colors"
                   >
                     CLOSE
@@ -584,3 +666,4 @@ export const EventsPage: React.FC = () => {
     </div>
   );
 };
+
